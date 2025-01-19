@@ -538,15 +538,15 @@ public:
                 fill_new_dims(t, func_calls, new_dims);
                 return ASRUtils::make_Array_t_util(al, loc, t_m_type, new_dims.p, new_dims.size());
             }
-            case ASR::ttypeType::Character: {
-                ASR::Character_t *t = ASR::down_cast<ASR::Character_t>(return_type);
+            case ASR::ttypeType::String: {
+                ASR::String_t *t = ASR::down_cast<ASR::String_t>(return_type);
                 func_calls.push_back(t->m_len_expr);
                 fix_exprs_ttype_t(func_calls, args, f);
                 int64_t a_len = t->m_len;
                 if( func_calls[0] ) {
                     a_len = ASRUtils::extract_len<SemanticError>(func_calls[0], loc);
                 }
-                return ASRUtils::TYPE(ASR::make_Character_t(al, loc, t->m_kind, a_len, func_calls[0]));
+                return ASRUtils::TYPE(ASR::make_String_t(al, loc, t->m_kind, a_len, func_calls[0], ASR::string_physical_typeType::PointerString));
             }
             case ASR::ttypeType::StructType: {
                 ASR::StructType_t* struct_t_type = ASR::down_cast<ASR::StructType_t>(return_type);
@@ -887,7 +887,7 @@ public:
             type = ASRUtils::TYPE(ASR::make_Complex_t(al, loc, 8));
             type = ASRUtils::make_Array_t_util(al, loc, type, dims.p, dims.size(), abi, is_argument);
         } else if (var_annotation == "str") {
-            type = ASRUtils::TYPE(ASR::make_Character_t(al, loc, 1, -2, nullptr));
+            type = ASRUtils::TYPE(ASR::make_String_t(al, loc, 1, -2, nullptr, ASR::string_physical_typeType::PointerString));
             type = ASRUtils::make_Array_t_util(al, loc, type, dims.p, dims.size(), abi, is_argument);
         } else if (var_annotation == "bool" || var_annotation == "i1") {
             type = ASRUtils::TYPE(ASR::make_Logical_t(al, loc, 4));
@@ -2157,7 +2157,7 @@ public:
             // string repeat
             int64_t left_int = 0, right_int = 0, dest_len = 0;
             if (right_is_int && ASRUtils::expr_value(right) != nullptr) {
-                ASR::Character_t *left_type2 = ASR::down_cast<ASR::Character_t>(
+                ASR::String_t *left_type2 = ASR::down_cast<ASR::String_t>(
                     ASRUtils::type_get_past_array(left_type));
                 LCOMPILERS_ASSERT(ASRUtils::extract_n_dims_from_ttype(left_type) == 0);
                 right_int = ASR::down_cast<ASR::IntegerConstant_t>(
@@ -2165,10 +2165,10 @@ public:
                 dest_len = left_type2->m_len * right_int;
                 if (dest_len < 0) dest_len = 0;
                 dest_type = ASR::down_cast<ASR::ttype_t>(
-                        ASR::make_Character_t(al, loc, left_type2->m_kind,
-                        dest_len, nullptr));
+                        ASR::make_String_t(al, loc, left_type2->m_kind,
+                        dest_len, nullptr, ASR::string_physical_typeType::PointerString));
             } else if (left_is_int && ASRUtils::expr_value(left) != nullptr) {
-                ASR::Character_t *right_type2 = ASR::down_cast<ASR::Character_t>(
+                ASR::String_t*right_type2 = ASR::down_cast<ASR::String_t> (
                     ASRUtils::type_get_past_array(right_type));
                 LCOMPILERS_ASSERT(ASRUtils::extract_n_dims_from_ttype(right_type) == 0);
                 left_int = ASR::down_cast<ASR::IntegerConstant_t>(
@@ -2176,11 +2176,11 @@ public:
                 dest_len = right_type2->m_len * left_int;
                 if (dest_len < 0) dest_len = 0;
                 dest_type = ASR::down_cast<ASR::ttype_t>(
-                        ASR::make_Character_t(al, loc, right_type2->m_kind,
-                        dest_len, nullptr));
+                        ASR::make_String_t(al, loc, right_type2->m_kind,
+                        dest_len, nullptr, ASR::string_physical_typeType::PointerString));
             } else {
-                dest_type = ASRUtils::TYPE(ASR::make_Character_t(al,
-                            loc, 1, -1, nullptr));
+                dest_type = ASRUtils::TYPE(ASR::make_String_t(al,
+                            loc, 1, -1, nullptr, ASR::string_physical_typeType::PointerString));
             }
 
             if (ASRUtils::expr_value(left) != nullptr && ASRUtils::expr_value(right) != nullptr) {
@@ -2208,15 +2208,15 @@ public:
         } else if (ASRUtils::is_character(*left_type) && ASRUtils::is_character(*right_type)
                             && op == ASR::binopType::Add) {
             // string concat
-            ASR::Character_t *left_type2 = ASR::down_cast<ASR::Character_t>(
+            ASR::String_t *left_type2 = ASR::down_cast<ASR::String_t>(
                    ASRUtils::type_get_past_array(left_type));
-            ASR::Character_t *right_type2 = ASR::down_cast<ASR::Character_t>(
+            ASR::String_t *right_type2 = ASR::down_cast<ASR::String_t>(
                    ASRUtils::type_get_past_array(right_type));
             LCOMPILERS_ASSERT(ASRUtils::extract_n_dims_from_ttype(left_type) == 0);
             LCOMPILERS_ASSERT(ASRUtils::extract_n_dims_from_ttype(right_type) == 0);
             dest_type = ASR::down_cast<ASR::ttype_t>(
-                    ASR::make_Character_t(al, loc, left_type2->m_kind,
-                    left_type2->m_len + right_type2->m_len, nullptr));
+                    ASR::make_String_t(al, loc, left_type2->m_kind,
+                    left_type2->m_len + right_type2->m_len, nullptr, ASR::string_physical_typeType::PointerString));
             if (ASRUtils::expr_value(left) != nullptr && ASRUtils::expr_value(right) != nullptr) {
                 char* left_value = ASR::down_cast<ASR::StringConstant_t>(
                                         ASRUtils::expr_value(left))->m_s;
@@ -2225,7 +2225,7 @@ public:
                 char* result;
                 std::string result_s = std::string(left_value) + std::string(right_value);
                 result = s2c(al, result_s);
-                LCOMPILERS_ASSERT((int64_t)strlen(result) == ASR::down_cast<ASR::Character_t>(dest_type)->m_len)
+                LCOMPILERS_ASSERT((int64_t)strlen(result) == ASR::down_cast<ASR::String_t>(dest_type)->m_len)
                 value = ASR::down_cast<ASR::expr_t>(ASR::make_StringConstant_t(
                     al, loc, result, dest_type));
             }
@@ -3420,8 +3420,8 @@ public:
         std::string var_name = "__name__";
         std::string var_value = module_name;
         size_t s_size = var_value.size();
-        ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_Character_t(al, loc,
-                1, s_size, nullptr));
+        ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+                1, s_size, nullptr, ASR::string_physical_typeType::PointerString));
         ASR::expr_t *value = ASRUtils::EXPR(ASR::make_StringConstant_t(al,
             loc, s2c(al, var_value), type));
         ASR::expr_t *init_expr = value;
@@ -3448,8 +3448,8 @@ public:
         std::string var_name = "__LPYTHON_VERSION__";
         std::string var_value = LFORTRAN_VERSION;
         size_t s_size = var_value.size();
-        ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_Character_t(al, loc,
-                1, s_size, nullptr));
+        ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+                1, s_size, nullptr, ASR::string_physical_typeType::PointerString));
         ASR::expr_t *value = ASRUtils::EXPR(ASR::make_StringConstant_t(al,
             loc, s2c(al, var_value), type));
         ASR::expr_t *init_expr = value;
@@ -3563,8 +3563,8 @@ public:
     void visit_ConstantStr(const AST::ConstantStr_t &x) {
         char *s = x.m_value;
         size_t s_size = std::string(s).size();
-        ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_Character_t(al, x.base.base.loc,
-                1, s_size, nullptr));
+        ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_String_t(al, x.base.base.loc,
+                1, s_size, nullptr, ASR::string_physical_typeType::PointerString));
         tmp = ASR::make_StringConstant_t(al, x.base.base.loc, s, type);
     }
 
@@ -3672,7 +3672,7 @@ public:
                         al, x.base.base.loc, result, dest_type));
                     break;
                 }
-                case ASR::ttypeType::Character: {
+                case ASR::ttypeType::String: {
                     char* left_value = ASR::down_cast<ASR::StringConstant_t>(
                                         ASRUtils::expr_value(lhs))->m_s;
                     char* right_value = ASR::down_cast<ASR::StringConstant_t>(
@@ -4074,7 +4074,7 @@ public:
             if (ASR::is_a<ASR::List_t>(*type)) {
                 tmp = ASR::make_ListSection_t(al, loc, value, ai, type, nullptr);
                 return false;
-            } else if (ASR::is_a<ASR::Character_t>(*type)) {
+            } else if (ASR::is_a<ASR::String_t>(*type)) {
                 tmp = ASR::make_StringSection_t(al, loc, value, ai.m_left, ai.m_right,
                     ai.m_step, type, nullptr);
                 return false;
@@ -5749,7 +5749,7 @@ public:
         // we are iterating the for in loop
         LCOMPILERS_ASSERT(loop_src_var_symbol != nullptr);
         auto loop_src_var = ASR::make_Var_t(al, loc, loop_src_var_symbol);
-        if (ASR::is_a<ASR::Character_t>(*loop_src_var_ttype)) {
+        if (ASR::is_a<ASR::String_t>(*loop_src_var_ttype)) {
             return ASRUtils::EXPR(ASR::make_StringLen_t(al, loc,
                                   ASRUtils::EXPR(loop_src_var),
                                   int_type, nullptr));
@@ -6231,7 +6231,7 @@ public:
                  ASR::EnumType_t* enum_type = ASR::down_cast<ASR::EnumType_t>(enum_->m_enum_type);
                  tmp = ASR::make_EnumValue_t(al, loc, e, type, enum_type->m_type, nullptr);
              } else if( std::string(attr_char) == "name" ) {
-                 ASR::ttype_t* char_type = ASRUtils::TYPE(ASR::make_Character_t(al, loc, 1, -2, nullptr));
+                 ASR::ttype_t* char_type = ASRUtils::TYPE(ASR::make_String_t(al, loc, 1, -2, nullptr, ASR::string_physical_typeType::PointerString));
                  tmp = ASR::make_EnumName_t(al, loc, e, type, char_type, nullptr);
              }
         } else if(ASR::is_a<ASR::Union_t>(*type)) {
@@ -6436,7 +6436,7 @@ public:
             if( attr_name == "value" ) {
                 tmp = ASR::make_EnumValue_t(al, loc, t_mem, type, enum_type->m_type, nullptr);
             } else if( attr_name == "name" ) {
-                ASR::ttype_t* char_type = ASRUtils::TYPE(ASR::make_Character_t(al, loc, 1, -2, nullptr));
+                ASR::ttype_t* char_type = ASRUtils::TYPE(ASR::make_String_t(al, loc, 1, -2, nullptr, ASR::string_physical_typeType::PointerString));
                 tmp = ASR::make_EnumName_t(al, loc, t_mem, type, char_type, nullptr);
             }
         } else if (ASR::is_a<ASR::Union_t>(*type)) {
@@ -6573,7 +6573,7 @@ public:
                         ASR::Variable_t* enum_m_var = ASR::down_cast<ASR::Variable_t>(enum_Var->m_m);
                         char *s = enum_m_var->m_name;
                         size_t s_size = std::string(s).size();
-                        enum_ref_type = ASRUtils::TYPE(ASR::make_Character_t(al, x.base.base.loc, 1, s_size, nullptr));
+                        enum_ref_type = ASRUtils::TYPE(ASR::make_String_t(al, x.base.base.loc, 1, s_size, nullptr, ASR::string_physical_typeType::PointerString));
                         enum_ref_value = ASRUtils::EXPR(ASR::make_StringConstant_t(al, x.base.base.loc,
                                             s, enum_ref_type));
                     }
@@ -7682,8 +7682,8 @@ public:
                 args.reserve(al, 1);
                 ASR::call_arg_t str_arg;
                 str_arg.loc = loc;
-                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_Character_t(al, loc,
-                        1, s_var.size(), nullptr));
+                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+                        1, s_var.size(), nullptr, ASR::string_physical_typeType::PointerString));
                 str_arg.m_value = ASRUtils::EXPR(
                         ASR::make_StringConstant_t(al, loc, s2c(al, s_var), str_type));
                 ASR::call_arg_t sub_arg;
@@ -7717,8 +7717,8 @@ public:
                 args.reserve(al, 1);
                 ASR::call_arg_t str_arg;
                 str_arg.loc = loc;
-                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_Character_t(al, loc,
-                        1, s_var.size(), nullptr));
+                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+                        1, s_var.size(), nullptr, ASR::string_physical_typeType::PointerString));
                 str_arg.m_value = ASRUtils::EXPR(
                         ASR::make_StringConstant_t(al, loc, s2c(al, s_var), str_type));
                 ASR::call_arg_t sub_arg;
@@ -7804,8 +7804,8 @@ public:
                 args.reserve(al, 1);
                 ASR::call_arg_t str_arg;
                 str_arg.loc = loc;
-                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_Character_t(al, loc,
-                        1, s_var.size(), nullptr));
+                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+                        1, s_var.size(), nullptr, ASR::string_physical_typeType::PointerString));
                 str_arg.m_value = ASRUtils::EXPR(
                         ASR::make_StringConstant_t(al, loc, s2c(al, s_var), str_type));
                 ASR::call_arg_t sub_arg;
@@ -7860,8 +7860,8 @@ public:
                 args.reserve(al, 1);
                 ASR::call_arg_t str_arg;
                 str_arg.loc = loc;
-                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_Character_t(al, loc,
-                        1, s_var.size(), nullptr));
+                ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+                        1, s_var.size(), nullptr, ASR::string_physical_typeType::PointerString));
                 str_arg.m_value = ASRUtils::EXPR(
                         ASR::make_StringConstant_t(al, loc, s2c(al, s_var), str_type));
                 ASR::call_arg_t sub_arg;
@@ -7887,8 +7887,8 @@ public:
                 throw SemanticError("String to undergo partition cannot be empty",
                     loc);
             }
-            ASR::ttype_t *char_type = ASRUtils::TYPE(ASR::make_Character_t(al,
-                loc, 1, s_var.size(), nullptr));
+            ASR::ttype_t *char_type = ASRUtils::TYPE(ASR::make_String_t(al,
+                loc, 1, s_var.size(), nullptr, ASR::string_physical_typeType::PointerString));
             ASR::expr_t *str = ASRUtils::EXPR(ASR::make_StringConstant_t(al,
                 loc, s2c(al, s_var), char_type));
             tmp = ASRUtils::Partition::create_partition(al, loc, args_, str, diag);
@@ -8091,8 +8091,8 @@ we will have to use something else.
             throw SemanticError("'str' object has no attribute '" + attr_name + "'",
                     loc);
         }
-        ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_Character_t(al, loc,
-                1, s_var.size(), nullptr));
+        ASR::ttype_t *str_type = ASRUtils::TYPE(ASR::make_String_t(al, loc,
+                1, s_var.size(), nullptr, ASR::string_physical_typeType::PointerString));
         tmp = ASR::make_StringConstant_t(al, loc, s2c(al, s_var), str_type);
     }
 
@@ -8180,7 +8180,7 @@ we will have to use something else.
                         }
                         ASR::expr_t *se = ASR::down_cast<ASR::expr_t>(
                                         ASR::make_Var_t(al, loc, st));
-                        if (ASR::is_a<ASR::Character_t>(*(ASRUtils::expr_type(se)))) {
+                        if (ASR::is_a<ASR::String_t>(*(ASRUtils::expr_type(se)))) {
                             handle_string_attributes(se, args, at->m_attr, loc);
                             return;
                         }
