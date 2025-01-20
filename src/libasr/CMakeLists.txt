@@ -12,7 +12,7 @@ if (NOT LFORTRAN_VERSION)
         CACHE STRING "LFortran version" FORCE)
 endif ()
 
-configure_file(config.h.in config.h)
+configure_file(config.h.in ${CMAKE_CURRENT_SOURCE_DIR}/config.h)
 
 set(SRC
     codegen/asr_to_cpp.cpp
@@ -30,8 +30,11 @@ set(SRC
     codegen/wasm_utils.cpp
 
     pass/nested_vars.cpp
+    pass/simplifier.cpp
     pass/where.cpp
+    pass/where_simplifier.cpp
     pass/function_call_in_declaration.cpp
+    pass/openmp.cpp
     pass/param_to_const.cpp
     pass/do_loops.cpp
     pass/for_all.cpp
@@ -42,7 +45,9 @@ set(SRC
     pass/init_expr.cpp
     pass/implied_do_loops.cpp
     pass/array_op.cpp
+    pass/array_op_simplifier.cpp
     pass/subroutine_from_function.cpp
+    pass/subroutine_from_function_simplifier.cpp
     pass/transform_optional_argument_functions.cpp
     pass/class_constructor.cpp
     pass/arr_slice.cpp
@@ -75,12 +80,12 @@ set(SRC
     asr_utils.cpp
     casting_utils.cpp
     diagnostics.cpp
-    stacktrace.cpp
     string_utils.cpp
     asr_scopes.cpp
     modfile.cpp
     pickle.cpp
     serialization.cpp
+    stacktrace.cpp
     utils2.cpp
 )
 if (WITH_LLVM)
@@ -90,6 +95,9 @@ if (WITH_LLVM)
         codegen/llvm_array_utils.cpp
         codegen/llvm_utils.cpp
     )
+    if (WITH_MLIR)
+        set(SRC ${SRC} codegen/asr_to_mlir.cpp)
+    endif()
     # We use deprecated API in LLVM, so we disable the warning until we upgrade
     if (NOT MSVC)
         set_source_files_properties(codegen/evaluator.cpp PROPERTIES
@@ -100,11 +108,17 @@ if (WITH_LLVM)
             COMPILE_FLAGS -Wno-deprecated-declarations)
         set_source_files_properties(codegen/llvm_utils.cpp PROPERTIES
             COMPILE_FLAGS -Wno-deprecated-declarations)
+        set_source_files_properties(stacktrace.cpp PROPERTIES
+            COMPILE_FLAGS -Wno-deprecated-declarations)
     endif()
 endif()
 add_library(asr STATIC ${SRC})
 target_include_directories(asr BEFORE PUBLIC ${libasr_SOURCE_DIR}/..)
 target_include_directories(asr BEFORE PUBLIC ${libasr_BINARY_DIR}/..)
+if (WITH_LIBUNWIND)
+    target_link_libraries(asr ${LIBUNWIND_LIBRARY})
+    target_link_options(asr PRIVATE -lunwind)
+endif()
 if (WITH_BFD)
     target_link_libraries(asr p::bfd)
 endif()

@@ -1,3 +1,4 @@
+#include "libasr/assert.h"
 #include <libasr/asr.h>
 #include <libasr/containers.h>
 #include <libasr/exception.h>
@@ -10,6 +11,7 @@
 
 #include <vector>
 #include <utility>
+#include<iostream>
 
 /*
 This ASR pass replaces operations over arrays with do loops.
@@ -75,6 +77,7 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
     ASR::dimension_t* op_dims; size_t op_n_dims;
     ASR::expr_t* op_expr;
     std::map<ASR::expr_t*, ASR::expr_t*>& resultvar2value;
+    std::map<ASR::expr_t*, ASR::expr_t*> intrinsics2result_var;
     bool realloc_lhs;
 
     public:
@@ -420,6 +423,86 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
     }
 
     void replace_ArrayItem(ASR::ArrayItem_t* x) {
+        for ( size_t i = 0; i < x->n_args; i++ ) {
+            ASR::expr_t* arg = x->m_args[i].m_right;
+            if (ASRUtils::is_array(ASRUtils::expr_type(arg))) {
+                Vec<ASR::expr_t*> idx_vars;
+                Vec<ASR::expr_t*> idx_vars_value, loop_vars;
+                std::vector<int> loop_var_indices;
+                Vec<ASR::stmt_t*> doloop_body;
+                const Location& loc = x->base.base.loc;
+                
+                if( result_var == nullptr ) {
+                    bool allocate = false;
+                    ASR::dimension_t* res_dims_p;
+                    int res_dims_n = ASRUtils::extract_dimensions_from_ttype(x->m_type, res_dims_p);
+                    ASR::ttype_t* result_var_type = get_result_type(ASRUtils::type_get_past_allocatable(ASRUtils::expr_type(x->m_v)),
+                        res_dims_p, res_dims_n, loc, x->class_type, allocate);
+                    if( allocate ) {
+                        result_var_type = ASRUtils::TYPE(ASR::make_Allocatable_t(al, loc,
+                           ASRUtils::type_get_past_allocatable(result_var_type)));
+                    }
+                    result_var = PassUtils::create_var(result_counter, "array_item", loc,
+                                    result_var_type, al, current_scope);
+                    result_counter += 1;
+                    if( allocate ) {
+                        allocate_result_var(x->m_v, res_dims_p, res_dims_n, true, true);
+                    }
+                }
+
+                int res_rank = PassUtils::get_rank(result_var);
+                create_do_loop(
+                    x->base.base.loc, res_rank,
+                    idx_vars, idx_vars_value, loop_vars, loop_var_indices, doloop_body, arg,
+                    [=, &idx_vars, &doloop_body] {
+                        ASR::expr_t* res = PassUtils::create_array_ref(result_var, idx_vars, al, current_scope);
+
+                        for (size_t j = 0, k = 0; j < x->n_args; j++) {
+                            if (ASRUtils::is_array(ASRUtils::expr_type(x->m_args[j].m_right))) {
+                                Vec<ASR::array_index_t> arr_dims;
+                                arr_dims.reserve(al, idx_vars.size());
+                                ASR::array_index_t ai;
+                                ai.loc = x->m_args[j].loc;
+                                ai.m_left = nullptr;
+                                ai.m_right = idx_vars[k];
+                                ai.m_step = nullptr;
+                                arr_dims.push_back(al, ai);
+
+                                ASR::expr_t* arr_index = ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                                            al, x->base.base.loc, x->m_args[j].m_right, arr_dims.p, arr_dims.n,
+                                                            ASRUtils::extract_type(
+                                                                ASRUtils::expr_type(x->m_args[j].m_right)),
+                                                            ASR::arraystorageType::ColMajor,
+                                                            nullptr));
+                                x->m_args[j].m_right = arr_index;
+                                k++;
+                            } else {
+                                x->m_args[j].loc = x->m_args[j].loc;
+                                x->m_args[j].m_left = nullptr;
+                                x->m_args[j].m_right = x->m_args[j].m_right;
+                                x->m_args[j].m_step = nullptr;
+                            }
+                        }
+                        x->m_type = ASRUtils::extract_type(ASRUtils::expr_type(x->m_v));
+
+                        ASR::stmt_t* assign = ASRUtils::STMT(
+                                                ASR::make_Assignment_t(al, x->base.base.loc, res,
+                                                    ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                                        al, x->base.base.loc, x->m_v, x->m_args, x->n_args,
+                                                        ASRUtils::extract_type(
+                                                            ASRUtils::expr_type(x->m_v)),
+                                                        ASR::arraystorageType::ColMajor,
+                                                        nullptr)),
+                                                    nullptr));
+
+                        doloop_body.push_back(al, assign);
+                    }                        
+                );
+                
+                *current_expr = result_var;
+                return;
+            }
+        }
         replace_vars_helper(x);
     }
 
@@ -537,7 +620,30 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
         }
         pass_result.push_back(al, doloop);
     }
+    //Fetches the place of the only array in a structInstanceMember expression.
+    ASR::expr_t** get_array_place_in_structInstaceMember(ASR::expr_t* structInstanceMember_expr){
+            ASR::expr_t** array_ref_container_node = nullptr;
+            // If array in first depth, return nullptr.
+            if (ASRUtils::is_array(ASRUtils::symbol_type(ASR::down_cast<ASR::StructInstanceMember_t>(structInstanceMember_expr)->m_m))){
+                return nullptr;
+            }
 
+            // This while loop is used to fetch the only single array from a structInstanceMember hierarchy.
+            // We assume there's a single array in the hierarachy, as multiple arrays should throw semantic error while building ASR.
+            while(ASR::is_a<ASR::StructInstanceMember_t>(*structInstanceMember_expr) && !array_ref_container_node ){
+                ASR::StructInstanceMember_t* tmp = ASR::down_cast<ASR::StructInstanceMember_t>(structInstanceMember_expr);
+                if(ASR::is_a<ASR::Array_t>(*ASRUtils::type_get_past_allocatable(ASRUtils::expr_type(tmp->m_v)))){
+                    array_ref_container_node = &(tmp->m_v);
+                } else if(ASR::is_a<ASR::StructInstanceMember_t>(*tmp->m_v)){
+                    structInstanceMember_expr = tmp->m_v; // Go deep.
+                } else if (ASR::is_a<ASR::ArrayItem_t>(*tmp->m_v)){
+                    structInstanceMember_expr = ASR::down_cast<ASR::ArrayItem_t>(tmp->m_v)->m_v; // Go deep
+                } else {
+                    break;
+                }
+            }
+            return array_ref_container_node;
+    }
     template <typename T>
     void replace_Constant(T* x) {
         if( !(result_var != nullptr && PassUtils::is_array(result_var) &&
@@ -551,12 +657,33 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
         Vec<ASR::expr_t*> idx_vars, loop_vars;
         std::vector<int> loop_var_indices;
         Vec<ASR::stmt_t*> doloop_body;
+        ASR::expr_t* result_var_origial = result_var;
+        ASR::expr_t** array_place_in_structInstaceMember = nullptr;
+
+        // Look up for arrays in structInstanceMember expressions.
+        if(ASR::is_a<ASR::StructInstanceMember_t>(*result_var)){
+            array_place_in_structInstaceMember = get_array_place_in_structInstaceMember(result_var);
+            if(array_place_in_structInstaceMember){
+                result_var = *array_place_in_structInstaceMember; // use the array expression, instead of whole structInstaceMember.
+            }
+        }
+
         create_do_loop_for_const_val(loc, n_dims, idx_vars,
             loop_vars, loop_var_indices, doloop_body,
             [=, &idx_vars, &doloop_body] () {
             ASR::expr_t* ref = *current_expr;
             ASR::expr_t* res = PassUtils::create_array_ref(result_var, idx_vars, al, current_scope);
-            ASR::stmt_t* assign = ASRUtils::STMT(ASR::make_Assignment_t(al, loc, res, ref, nullptr));
+            ASR::expr_t* target;
+            if(array_place_in_structInstaceMember){
+                *array_place_in_structInstaceMember = res; // Replace the array with its ArrayItem expression.
+                target = result_var_origial;
+                // Use type of array.
+                ASR::StructInstanceMember_t* tmp = ASR::down_cast<ASR::StructInstanceMember_t>(target);
+                tmp->m_type = ASR::down_cast<ASR::Array_t>(ASRUtils::type_get_past_allocatable(tmp->m_type))->m_type;
+            } else {
+                target = res;
+            }
+            ASR::stmt_t* assign = ASRUtils::STMT(ASR::make_Assignment_t(al, loc, target, ref, nullptr));
             doloop_body.push_back(al, assign);
         });
         result_var = nullptr;
@@ -691,6 +818,7 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
     }
 
     void replace_ArraySection(ASR::ArraySection_t* x) {
+        bool has_array_type_index = false;
         Vec<ASR::dimension_t> x_dims;
         x_dims.reserve(al, x->n_args);
         const Location& loc = x->base.base.loc;
@@ -715,7 +843,6 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
                 ASR::expr_t* start_value = ASRUtils::expr_value(x_dim.m_start);
                 ASR::expr_t* end_value = ASRUtils::expr_value(x->m_args[i].m_right);
                 ASR::expr_t* step_value = ASRUtils::expr_value(x->m_args[i].m_step);
-                ASR::expr_t* length_value = nullptr;
                 if( ASRUtils::is_value_constant(start_value) &&
                     ASRUtils::is_value_constant(end_value) &&
                     ASRUtils::is_value_constant(step_value) ) {
@@ -731,8 +858,6 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
                     if( !ASRUtils::extract_value(step_value, const_step) ) {
                         LCOMPILERS_ASSERT(false);
                     }
-                    length_value = make_ConstantWithKind(make_IntegerConstant_t, make_Integer_t,
-                        ((const_end - const_start)/const_step) + 1, 4, loc);
                 }
 
                 ASR::expr_t* m_right = x->m_args[i].m_right;
@@ -741,10 +866,149 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
                 m_right = CastingUtil::perform_casting(m_right, int32_type, al, loc);
                 m_left = CastingUtil::perform_casting(m_left, int32_type, al, loc);
                 m_step = CastingUtil::perform_casting(m_step, int32_type, al, loc);
-                x_dim.m_length = builder.ElementalAdd(builder.ElementalDiv(
-                    builder.ElementalSub(m_right, m_left, loc),
-                    m_step, loc), i32_one, loc, length_value);
+                x_dim.m_length = builder.Add(builder.Div(
+                    builder.Sub(m_right, m_left),
+                    m_step), i32_one);
                 x_dims.push_back(al, x_dim);
+            } else if (x->m_args[i].m_step == nullptr && x->m_args[i].m_right != nullptr
+                        && ASRUtils::is_array(ASRUtils::expr_type(x->m_args[i].m_right))) {
+                /*
+                    Convert `array_1(:, array_2)` to :
+
+                        DO i = lbound(array_3, 1), ubound(array_3, 1)
+                            DO j = lbound(array_3, 2), ubound(array_3, 2)
+                                array_3(i, j) = array_1(i, array_2(j))
+                            END DO
+                        END DO
+                */
+                has_array_type_index = true;
+                ASR::expr_t* arg = x->m_args[i].m_right;
+                Vec<ASR::expr_t*> idx_vars;
+                Vec<ASR::expr_t*> idx_vars_value, loop_vars;
+                std::vector<int> loop_var_indices;
+                Vec<ASR::stmt_t*> doloop_body;
+                if( result_var == nullptr ) {
+                    bool allocate = false;
+                    ASR::dimension_t* res_dims = nullptr;
+                    size_t res_dims_n = ASRUtils::extract_dimensions_from_ttype(ASRUtils::expr_type(x->m_v), res_dims);
+                    Vec<ASR::dimension_t> res_dims_vec;
+                    res_dims_vec.from_pointer_n_copy(al, res_dims, res_dims_n);
+                    for (size_t j = 0; j < x->n_args; j++) {
+                        if (x->m_args[j].m_step != nullptr) {
+                            ASR::expr_t* m_left = x->m_args[j].m_left;
+                            LCOMPILERS_ASSERT(m_left);
+                            ASR::expr_t* m_right = x->m_args[j].m_right;
+                            LCOMPILERS_ASSERT(m_right);
+                            ASR::expr_t* m_step = x->m_args[j].m_step;
+                            m_left = CastingUtil::perform_casting(m_left, int32_type, al, loc);
+                            m_right = CastingUtil::perform_casting(m_right, int32_type, al, loc);
+                            m_step = CastingUtil::perform_casting(m_step, int32_type, al, loc);
+                            res_dims_vec.p[j].m_start = x->m_args[j].m_left;
+                            res_dims_vec.p[j].m_length = builder.Add(builder.Div(
+                                builder.Sub(m_right, m_left),
+                                m_step), i32_one);
+                        } else if (ASRUtils::is_array(ASRUtils::expr_type(x->m_args[j].m_right))) {
+                            ASR::dimension_t* arg_dim = nullptr;
+                            [[maybe_unused]] size_t right_index_size = ASRUtils::extract_dimensions_from_ttype(
+                                    ASRUtils::expr_type(x->m_args[j].m_right), arg_dim);
+                            LCOMPILERS_ASSERT( right_index_size == 1);
+                            res_dims_vec.p[j] = arg_dim[0];
+                        } else if (x->m_args[j].m_right != nullptr || x->m_args[j].m_left != nullptr) {
+                            ASR::expr_t* m_left = x->m_args[j].m_left;
+                            ASR::expr_t* m_right = x->m_args[j].m_right;
+
+                            if (m_left) {
+                              m_left = CastingUtil::perform_casting(m_left, int32_type, al, loc);
+                            } else {
+                              m_left = i32_one;
+                            }
+
+                            res_dims_vec.p[j].m_start = m_left;
+                            if (m_right) {
+                              m_right = CastingUtil::perform_casting(m_right, int32_type, al, loc);
+                              res_dims_vec.p[j].m_length = builder.Add(builder.Sub(m_right, m_left), i32_one);
+                            } else {
+                              res_dims_vec.p[j].m_length = builder.Add(builder.Sub(res_dims_vec.p[j].m_length, m_left), i32_one);
+                            }
+                        }
+                    }
+                    ASR::ttype_t* result_var_type = get_result_type(ASRUtils::expr_type(x->m_v),
+                        res_dims_vec.p, (int)res_dims_vec.size(), loc, x->class_type, allocate);
+                    if( allocate ) {
+                        result_var_type = ASRUtils::TYPE(ASR::make_Allocatable_t(al, loc,
+                           ASRUtils::type_get_past_allocatable(result_var_type)));
+                    }
+                    result_var = PassUtils::create_var(result_counter, "array_section", loc,
+                                    result_var_type, al, current_scope);
+                    result_counter += 1;
+                    if( allocate ) {
+                        allocate_result_var(x->m_v, res_dims_vec.p, (int)res_dims_vec.size(), true, true);
+                    }
+                }
+                create_do_loop(
+                    loc, PassUtils::get_rank(x->m_v),
+                    idx_vars, idx_vars_value, loop_vars, loop_var_indices, doloop_body, arg,
+                    [=, &idx_vars, &doloop_body, &builder] {
+                        ASR::expr_t* res = PassUtils::create_array_ref(result_var, idx_vars, al, current_scope);
+
+                        for (size_t j = 0; j < x->n_args; j++) {
+                            if (ASRUtils::is_array(ASRUtils::expr_type(x->m_args[j].m_right))) {
+                                Vec<ASR::array_index_t> arr_dims;
+                                arr_dims.reserve(al, idx_vars.size());
+                                ASR::array_index_t ai;
+                                ai.loc = idx_vars[j]->base.loc;
+                                ai.m_left = nullptr;
+                                ai.m_right = idx_vars[j];
+                                ai.m_step = nullptr;
+                                arr_dims.push_back(al, ai);
+
+                                ASR::expr_t* arr_index = ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                                            al, loc, x->m_args[j].m_right, arr_dims.p, arr_dims.n,
+                                                            ASRUtils::extract_type(
+                                                                ASRUtils::expr_type(x->m_args[j].m_right)),
+                                                            ASR::arraystorageType::ColMajor,
+                                                            nullptr));
+                                x->m_args[j].m_right = arr_index;
+                            } else {
+                                ASR::expr_t* m_right = x->m_args[j].m_right;
+                                ASR::expr_t* m_left = x->m_args[j].m_left;
+                                ASR::expr_t* m_step = x->m_args[j].m_step;
+                                if (m_right) m_right = CastingUtil::perform_casting(m_right, int32_type, al, loc);
+                                if (m_left) m_left = CastingUtil::perform_casting(m_left, int32_type, al, loc);
+
+                                if (m_step) {
+                                  m_step = CastingUtil::perform_casting(m_step, int32_type, al, loc);
+                                } else {
+                                  m_step = i32_one;
+                                }
+
+                                x->m_args[j].loc = idx_vars[j]->base.loc;
+                                if (m_left) {
+                                  x->m_args[j].m_right = builder.Add(m_left, builder.Mul(
+                                          builder.Sub(idx_vars[j], i32_one), m_step));
+                                } else {
+                                  x->m_args[j].m_right = builder.Mul(idx_vars[j], m_step);
+                                }
+
+                                x->m_args[j].m_step = nullptr;
+                            }
+                        }
+
+                        ASR::stmt_t* assign = ASRUtils::STMT(
+                                                ASR::make_Assignment_t(al, loc, res,
+                                                    ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                                        al, loc, x->m_v, x->m_args, x->n_args,
+                                                        ASRUtils::extract_type(
+                                                            ASRUtils::expr_type(x->m_v)),
+                                                        ASR::arraystorageType::ColMajor,
+                                                        nullptr)),
+                                                    nullptr));
+
+                        doloop_body.push_back(al, assign);
+                    }
+                );
+                *current_expr = result_var;
+                break;
             }
         }
         if( op_expr == *current_expr ) {
@@ -758,7 +1022,7 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
         } else {
             x_m_type = ASRUtils::TYPE(ASR::make_Pointer_t(al, loc,
                 ASRUtils::type_get_past_allocatable(ASRUtils::duplicate_type(al,
-                ASRUtils::type_get_past_pointer(x->m_type), &empty_dims))));
+                ASRUtils::type_get_past_pointer(x->m_type), has_array_type_index ? nullptr : &empty_dims))));
         }
         ASR::expr_t* array_section_pointer = PassUtils::create_var(
             result_counter, "_array_section_pointer_", loc,
@@ -1017,6 +1281,9 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
 
 
     void replace_Cast(ASR::Cast_t* x) {
+        if (ASR::is_a<ASR::IntrinsicArrayFunction_t>(*x->m_arg)) {
+            return;
+        }
         if( x->m_kind == ASR::cast_kindType::ListToArray ) {
             return ;
         }
@@ -1293,13 +1560,21 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
 
     template <typename T>
     void replace_intrinsic_function(T* x) {
+        if( intrinsics2result_var[(ASR::expr_t*) x] ){
+            *current_expr = intrinsics2result_var[(ASR::expr_t*) x];
+            return;
+        }
         LCOMPILERS_ASSERT(current_scope != nullptr);
         const Location& loc = x->base.base.loc;
         std::vector<bool> array_mask(x->n_args, false);
         bool at_least_one_array = false;
         for( size_t iarg = 0; iarg < x->n_args; iarg++ ) {
-            array_mask[iarg] = ASRUtils::is_array(
-                ASRUtils::expr_type(x->m_args[iarg]));
+            ASR::expr_t* arg = x->m_args[iarg];
+            if (ASR::is_a<ASR::ArrayPhysicalCast_t>(*arg)) {
+                arg = ASR::down_cast<ASR::ArrayPhysicalCast_t>(arg)->m_arg;
+            }
+            array_mask[iarg] = ASRUtils::is_array(ASRUtils::expr_type(arg)) || ASR::is_a<ASR::IntrinsicArrayFunction_t>(*arg) ||
+                        ASR::is_a<ASR::RealBinOp_t>(*arg) || ASR::is_a<ASR::IntegerBinOp_t>(*arg);
             at_least_one_array = at_least_one_array || array_mask[iarg];
         }
         if (!at_least_one_array) {
@@ -1357,7 +1632,7 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
         bool result_var_created = false;
         if( result_var == nullptr ) {
             if (x->m_type && !ASRUtils::is_array(x->m_type)) {
-                ASR::ttype_t* sibling_type = ASRUtils::expr_type(operand);
+                ASR::ttype_t* sibling_type = ASRUtils::expr_type(first_array_operand);
                 ASR::dimension_t* m_dims; int ndims;
                 PassUtils::get_dim_rank(sibling_type, m_dims, ndims);
                 ASR::ttype_t* arr_type = ASRUtils::make_Array_t_util(
@@ -1381,6 +1656,7 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
             result_var_created = true;
         }
         *current_expr = result_var;
+        intrinsics2result_var[(ASR::expr_t*) x] = result_var;
         if( op_expr == &(x->base) ) {
             op_dims = nullptr;
             op_n_dims = ASRUtils::extract_dimensions_from_ttype(
@@ -1422,23 +1698,44 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
 
     void replace_IntrinsicElementalFunction(ASR::IntrinsicElementalFunction_t* x) {
         replace_intrinsic_function(x);
+        return ;
     }
 
     void replace_IntrinsicArrayFunction(ASR::IntrinsicArrayFunction_t* x) {
-        if(!ASRUtils::IntrinsicArrayFunctionRegistry::is_elemental(x->m_arr_intrinsic_id)) {
-            // ASR::BaseExprReplacer<ReplaceArrayOp>::replace_IntrinsicArrayFunction(x);
-            if( op_expr == &(x->base) ) {
-                op_dims = nullptr;
-                op_n_dims = ASRUtils::extract_dimensions_from_ttype(
-                    ASRUtils::expr_type(*current_expr), op_dims);
-            }
-            return ;
+        if (op_expr == &(x->base)) {
+            op_dims = nullptr;
+            op_n_dims = ASRUtils::extract_dimensions_from_ttype(
+                ASRUtils::expr_type(*current_expr), op_dims);
         }
-        replace_intrinsic_function(x);
+
+        for (size_t i = 0; i < x->n_args; i++){
+            ASR::expr_t* arg = x->m_args[i];
+
+            if (ASR::is_a<ASR::ArrayPhysicalCast_t>(*arg)) {
+                arg = ASR::down_cast<ASR::ArrayPhysicalCast_t>(arg)->m_arg;
+            }
+
+            if (ASR::is_a<ASR::IntrinsicElementalFunction_t>(*arg)) {
+                ASR::expr_t** current_expr_copy_9 = current_expr;
+                current_expr = &(x->m_args[i]);
+                ASR::dimension_t* op_dims_copy = op_dims;
+                size_t op_n_dims_copy = op_n_dims;
+                self().replace_expr(x->m_args[i]);
+                x->m_args[i] = *current_expr;
+                op_dims = op_dims_copy;
+                op_n_dims = op_n_dims_copy;
+                current_expr = current_expr_copy_9;
+            }
+        }
+        return ;
     }
 
     void replace_ArrayPhysicalCast(ASR::ArrayPhysicalCast_t* x) {
         ASR::BaseExprReplacer<ReplaceArrayOp>::replace_ArrayPhysicalCast(x);
+        if ( ASRUtils::is_value_constant(x->m_arg) && !ASRUtils::is_array(ASRUtils::expr_type(x->m_arg)) ) {
+            *current_expr = ASRUtils::expr_value(x->m_arg);
+            return;
+        }
         if( (x->m_old == x->m_new &&
              x->m_old != ASR::array_physical_typeType::DescriptorArray) ||
             (x->m_old == x->m_new && x->m_old == ASR::array_physical_typeType::DescriptorArray &&
@@ -1573,7 +1870,7 @@ class ReplaceArrayOp: public ASR::BaseExprReplacer<ReplaceArrayOp> {
                     ASR::expr_t* op_el_wise = nullptr;
                     op_el_wise = ASRUtils::EXPR(ASRUtils::make_FunctionCall_t_util(al, loc,
                                     x->m_name, x->m_original_name, ref_args.p, ref_args.size(), dim_less_type,
-                                    nullptr, x->m_dt));
+                                    nullptr, x->m_dt, false));
                     ASR::expr_t* res = PassUtils::create_array_ref(result_var, idx_vars, al, current_scope);
                     ASR::stmt_t* assign = ASRUtils::STMT(ASR::make_Assignment_t(al, loc, res, op_el_wise, nullptr));
                     doloop_body.push_back(al, assign);
@@ -1720,14 +2017,219 @@ class ArrayOpVisitor : public ASR::CallReplacerOnExpressionsVisitor<ArrayOpVisit
 
         inline void visit_AssignmentUtil(const ASR::Assignment_t& x) {
             ASR::expr_t** current_expr_copy_9 = current_expr;
+            current_expr = const_cast<ASR::expr_t**>(&(x.m_value));
+            bool remove_original_statement_value = false;
             ASR::expr_t* original_value = x.m_value;
             if( ASR::is_a<ASR::ArrayBroadcast_t>(*x.m_value) ) {
-                resultvar2value[replacer.result_var] =
-                    ASR::down_cast<ASR::ArrayBroadcast_t>(original_value)->m_array;
+                ASR::ArrayBroadcast_t* array_broadcast = ASR::down_cast<ASR::ArrayBroadcast_t>(x.m_value);
+                if ( ASR::is_a<ASR::TypeInquiry_t>(*array_broadcast->m_array) ) {
+                    array_broadcast->m_array = ASR::down_cast<ASR::TypeInquiry_t>(array_broadcast->m_array)->m_value;
+                }
+                if( !ASRUtils::is_array(ASRUtils::expr_type(array_broadcast->m_array)) &&
+                    ASR::is_a<ASR::FunctionCall_t>(
+                        *ASRUtils::get_past_array_physical_cast(array_broadcast->m_array)) ) {
+                    ASR::stmt_t* auxiliary_assign_stmt_ = nullptr;
+                    std::string name = current_scope->get_unique_name(
+                        "__libasr_created_scalar_auxiliary_variable");
+                    *current_expr = PassUtils::create_auxiliary_variable_for_expr(
+                        array_broadcast->m_array, name, al, current_scope, auxiliary_assign_stmt_);
+                    LCOMPILERS_ASSERT(auxiliary_assign_stmt_ != nullptr);
+                    pass_result.push_back(al, auxiliary_assign_stmt_);
+                    resultvar2value[replacer.result_var] = *current_expr;
+                } else {
+                    if (ASR::is_a<ASR::ArrayItem_t>(*x.m_target)) {
+                        this->visit_expr(*x.m_target);
+                        ASR::ArrayItem_t *array_item = ASR::down_cast<ASR::ArrayItem_t>(x.m_target);
+                        for (size_t i=0;i<array_item->n_args;i++) {
+                            if (ASR::is_a<ASR::ArraySection_t>(*array_item->m_args->m_right)){
+                                ASR::ArraySection_t* array_section = ASR::down_cast<ASR::ArraySection_t>(array_item->m_args->m_right);
+                                ASRUtils::ASRBuilder b(al, array_section->base.base.loc);
+
+                                ASR::ttype_t* integer_type = ASR::down_cast<ASR::ttype_t>(
+                                    ASR::make_Integer_t(al, array_section->base.base.loc, 4));
+                                ASR::expr_t* itr = PassUtils::create_var(
+                                    0, "itr", array_section->base.base.loc, integer_type, al, current_scope);
+
+                                ASR::expr_t* lbound = array_section->m_args->m_left;
+                                ASR::expr_t* ubound = array_section->m_args->m_right;
+
+                                Vec<ASR::array_index_t> inner_arr_dims;
+                                inner_arr_dims.reserve(al, 1);
+
+                                ASR::array_index_t inner_ai;
+                                inner_ai.loc = array_section->base.base.loc;
+                                inner_ai.m_left = nullptr;
+                                inner_ai.m_right = itr;
+                                inner_ai.m_step = nullptr;
+                                inner_arr_dims.push_back(al, inner_ai);
+
+                                ASR::expr_t* inner_index = ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                    al, array_section->base.base.loc, array_section->m_v, inner_arr_dims.p,
+                                    inner_arr_dims.n, ASRUtils::extract_type(
+                                        ASRUtils::expr_type(array_section->m_v)),
+                                    ASR::arraystorageType::ColMajor, nullptr));
+
+                                Vec<ASR::array_index_t> outer_arr_dims;
+                                outer_arr_dims.reserve(al, 1);
+
+                                ASR::array_index_t outer_ai;
+                                outer_ai.loc = array_item->m_v->base.loc;
+                                outer_ai.m_left = nullptr;
+                                outer_ai.m_right = inner_index;
+                                outer_ai.m_step = nullptr;
+                                outer_arr_dims.push_back(al, outer_ai);
+
+                                ASR::expr_t* outer_index = ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                    al, array_item->m_v->base.loc, array_item->m_v, outer_arr_dims.p,
+                                    outer_arr_dims.n, ASRUtils::extract_type(
+                                        ASRUtils::expr_type(array_item->m_v)),
+                                    ASR::arraystorageType::ColMajor, nullptr));
+                                
+                                // multidimensional - array section is yet to handled using a recursive code with similar logic.
+                                pass_result.push_back(al,
+                                    b.DoLoop(itr, lbound, ubound, {
+                                        b.Assignment(outer_index, array_broadcast->m_array),
+                                    }, nullptr)
+                                );
+                            } else if (ASRUtils::is_array(ASRUtils::expr_type(array_item->m_args[i].m_right))){
+                                ASRUtils::ASRBuilder b(al, array_item->base.base.loc);
+
+                                ASR::ttype_t* integer_type = ASR::down_cast<ASR::ttype_t>(
+                                    ASR::make_Integer_t(al, array_item->base.base.loc, 4));
+                                ASR::expr_t* itr = PassUtils::create_var(
+                                    0, "itr", array_item->base.base.loc, integer_type, al, current_scope);
+
+                                ASR::expr_t* inner_size = ASRUtils::EXPR(ASR::make_ArraySize_t(
+                                    al,
+                                    array_item->m_args->m_right->base.loc,
+                                    array_item->m_args->m_right,
+                                    nullptr,
+                                    integer_type,
+                                    nullptr
+                                ));
+
+                                Vec<ASR::array_index_t> inner_arr_dims;
+                                inner_arr_dims.reserve(al, 1);
+
+                                ASR::array_index_t inner_ai;
+                                inner_ai.loc = array_item->m_args->m_right->base.loc;
+                                inner_ai.m_left = nullptr;
+                                inner_ai.m_right = itr;
+                                inner_ai.m_step = nullptr;
+                                inner_arr_dims.push_back(al, inner_ai);
+
+                                ASR::expr_t* inner_index = ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                    al, array_item->m_args->m_right->base.loc, array_item->m_args->m_right, inner_arr_dims.p,
+                                    inner_arr_dims.n, ASRUtils::extract_type(
+                                        ASRUtils::expr_type(array_item->m_args->m_right)),
+                                    ASR::arraystorageType::ColMajor, nullptr));
+
+                                Vec<ASR::array_index_t> outer_arr_dims;
+                                outer_arr_dims.reserve(al, 1);
+
+                                ASR::array_index_t outer_ai;
+                                outer_ai.loc = array_item->m_v->base.loc;
+                                outer_ai.m_left = nullptr;
+                                outer_ai.m_right = inner_index;
+                                outer_ai.m_step = nullptr;
+                                outer_arr_dims.push_back(al, outer_ai);
+
+                                ASR::expr_t* outer_index = ASRUtils::EXPR(ASR::make_ArrayItem_t(
+                                    al, array_item->m_v->base.loc, array_item->m_v, outer_arr_dims.p,
+                                    outer_arr_dims.n, ASRUtils::extract_type(
+                                        ASRUtils::expr_type(array_item->m_v)),
+                                    ASR::arraystorageType::ColMajor, nullptr));
+
+                                pass_result.push_back(al,
+                                    b.DoLoop(itr, b.i32(1), inner_size, {
+                                        b.Assignment(outer_index, array_broadcast->m_array),
+                                    }, nullptr)
+                                );
+                            }
+                        }
+                    } else {
+                        resultvar2value[replacer.result_var] = array_broadcast->m_array;
+                    }
+                }
+            } else if ( PassUtils::is_array(x.m_value) || ASR::is_a<ASR::ArrayItem_t>(*x.m_value))  {
+                size_t n_rhs_dim = 0; 
+                ASR::expr_t* rhs_array_var = nullptr;
+                if (ASR::is_a<ASR::ArrayItem_t>(*x.m_value)) {
+                    rhs_array_var = ASR::down_cast<ASR::ArrayItem_t>(x.m_value)->m_v;
+                    n_rhs_dim = ASR::down_cast<ASR::ArrayItem_t>(x.m_value)->n_args;
+                } else if (ASR::is_a<ASR::Var_t>(*x.m_value)) {
+                    n_rhs_dim = ASRUtils::extract_n_dims_from_ttype(ASRUtils::expr_type(x.m_value));
+                    rhs_array_var = x.m_value;
+                } else if (ASR::is_a<ASR::ArraySection_t>(*x.m_value)) {
+                    rhs_array_var = ASR::down_cast<ASR::ArraySection_t>(x.m_value)->m_v;
+                    n_rhs_dim = ASR::down_cast<ASR::ArraySection_t>(x.m_value)->n_args;
+                }
+                if (ASR::is_a<ASR::ArrayItem_t>(*x.m_target)) {
+                    ASR::ArrayItem_t* array_item_target = ASR::down_cast<ASR::ArrayItem_t>(x.m_target);
+                    bool is_array_index = false;
+                    for (size_t i=0; i<array_item_target->n_args; i++) {
+                        if(ASRUtils::is_array(ASRUtils::expr_type(array_item_target->m_args[i].m_right))){
+                            is_array_index = true;
+                        }
+                    }
+                    if (is_array_index) {
+                        ASRUtils::ASRBuilder b(al, array_item_target->base.base.loc);
+                        ASR::ttype_t* integer_type = ASR::down_cast<ASR::ttype_t>(
+                                ASR::make_Integer_t(al, array_item_target->base.base.loc, 4));
+                        Vec<ASR::dimension_t> temporary_array_dims;
+                        temporary_array_dims.reserve(al, 1);
+                        for(size_t i = 0; i < n_rhs_dim; i++) {
+                            ASR::dimension_t temporary_array_dim;
+                            temporary_array_dim.loc = rhs_array_var->base.loc;
+                            temporary_array_dim.m_start = ASRUtils::EXPR(ASR::make_IntegerConstant_t(
+                                al, rhs_array_var->base.loc, 1, integer_type));
+                            temporary_array_dim.m_length = ASRUtils::EXPR(ASR::make_ArraySize_t(
+                                al, rhs_array_var->base.loc, rhs_array_var,
+                                b.i32(i + 1), integer_type, nullptr));
+                            temporary_array_dims.push_back(al, temporary_array_dim);
+                        }
+
+                        ASR::ttype_t* temporary_array_type = ASRUtils::TYPE(ASR::make_Array_t(
+                            al, rhs_array_var->base.loc, ASRUtils::extract_type(
+                            ASRUtils::expr_type(rhs_array_var)),
+                            temporary_array_dims.p, temporary_array_dims.size(),
+                            ASR::array_physical_typeType::PointerToDataArray));
+
+                        ASR::expr_t* temporary_array = PassUtils::create_var(
+                            0, "_temporary_value", rhs_array_var->base.loc,
+                            ASRUtils::duplicate_type(al, temporary_array_type), al, current_scope);
+
+                        Vec<ASR::expr_t*> idx_vars;
+                        Vec<ASR::expr_t*> temp_idx_vars_lhs;
+                        Vec<ASR::expr_t*> temp_idx_vars_rhs;
+                        Vec<ASR::stmt_t*> doloop_body;
+                        PassUtils::ReplacerUtils::create_do_loop(al, rhs_array_var->base.loc, n_rhs_dim, 
+                                rhs_array_var, idx_vars, doloop_body, [=, &doloop_body, &b, &idx_vars] () {
+                            ASR::expr_t* res = PassUtils::create_array_ref(temporary_array, idx_vars, al, current_scope);
+                            ASR::expr_t* ref = PassUtils::create_array_ref(rhs_array_var, idx_vars, al, current_scope);
+                            ASR::stmt_t* assign = b.Assignment(res, ref);
+                            doloop_body.push_back(al, assign);
+                        }, current_scope, &pass_result);
+                        doloop_body.resize(al, 0);
+                        idx_vars.resize(al, 0);
+
+                        PassUtils::ReplacerUtils::create_do_loop_assign(al, array_item_target->base.base.loc, x.m_target,
+                                x.m_value, idx_vars, temp_idx_vars_lhs, temp_idx_vars_rhs, doloop_body, 
+                                [=, &temp_idx_vars_lhs, &temp_idx_vars_rhs, &doloop_body, &b] () {
+                            ASR::expr_t* res = PassUtils::create_array_ref(array_item_target->m_v, temp_idx_vars_lhs, al, current_scope);
+                            ASR::expr_t* ref = PassUtils::create_array_ref(temporary_array, temp_idx_vars_rhs, al, current_scope);
+                            ASR::stmt_t* assign = b.Assignment(res, ref);
+                            doloop_body.push_back(al, assign);
+                        }, current_scope, &pass_result);
+                        
+                        remove_original_statement_value = true;
+                        current_expr = const_cast<ASR::expr_t**>(&(rhs_array_var));
+                    }
+                }
+                resultvar2value[replacer.result_var] = original_value;
             } else {
                 resultvar2value[replacer.result_var] = original_value;
             }
-            current_expr = const_cast<ASR::expr_t**>(&(x.m_value));
             this->call_replacer();
             current_expr = current_expr_copy_9;
             if( x.m_value == original_value ) {
@@ -1735,9 +2237,9 @@ class ArrayOpVisitor : public ASR::CallReplacerOnExpressionsVisitor<ArrayOpVisit
                 replacer.result_var = nullptr;
                 this->visit_expr(*x.m_value);
                 replacer.result_var = result_var_copy;
-                remove_original_statement = false;
+                remove_original_statement = remove_original_statement_value;
             } else if( x.m_value ) {
-                if( ASR::is_a<ASR::ArrayReshape_t>(*x.m_value) ) {
+                if( ASR::is_a<ASR::ArrayReshape_t>(*x.m_value)) {
                     remove_original_statement = false;
                     return ;
                 }
@@ -1948,64 +2450,121 @@ class ArrayOpVisitor : public ASR::CallReplacerOnExpressionsVisitor<ArrayOpVisit
 
         }
 
-        void visit_SubroutineCall(const ASR::SubroutineCall_t& x) {
-            ASR::symbol_t* sym = x.m_original_name;
-            if (sym && ASR::is_a<ASR::ExternalSymbol_t>(*sym)) {
-                ASR::ExternalSymbol_t* ext_sym = ASR::down_cast<ASR::ExternalSymbol_t>(sym);
-                std::string name = ext_sym->m_name;
-                std::string module_name = ext_sym->m_module_name;
-                if (module_name == "lfortran_intrinsic_math" && name == "random_number") {
-                    // iterate over args and check if any of them is an array
-                    ASR::expr_t* arg = nullptr;
-                    for (size_t i=0; i<x.n_args; i++) {
-                        if (ASRUtils::is_array(ASRUtils::expr_type(x.m_args[i].m_value))) {
-                            arg = x.m_args[i].m_value;
-                            break;
-                        }
-                    }
-                    if (arg) {
-                        /*
-                            real :: b(3)
-                            call random_number(b)
-                                To
-                            real :: b(3)
-                            do i=lbound(b,1),ubound(b,1)
-                                call random_number(b(i))
-                            end do
-                        */
-                        int var_rank = PassUtils::get_rank(arg);
-                        int result_rank = PassUtils::get_rank(arg);
-                        Vec<ASR::expr_t*> idx_vars, loop_vars, idx_vars_value;
-                        std::vector<int> loop_var_indices;
-                        Vec<ASR::stmt_t*> doloop_body;
-                        create_do_loop(arg->base.loc, arg, var_rank, result_rank, idx_vars,
-                        loop_vars, idx_vars_value, loop_var_indices, doloop_body,
-                        arg, 2,
-                        [=, &idx_vars_value, &idx_vars, &doloop_body]() {
-                            Vec<ASR::array_index_t> array_index; array_index.reserve(al, idx_vars.size());
-                            for( size_t i = 0; i < idx_vars.size(); i++ ) {
-                                ASR::array_index_t idx;
-                                idx.m_left = nullptr;
-                                idx.m_right = idx_vars_value[i];
-                                idx.m_step = nullptr;
-                                idx.loc = idx_vars_value[i]->base.loc;
-                                array_index.push_back(al, idx);
-                            }
-                            ASR::expr_t* array_item = ASRUtils::EXPR(ASR::make_ArrayItem_t(al, x.base.base.loc,
-                                                    arg, array_index.p, array_index.size(),
-                                                    ASRUtils::type_get_past_array(ASRUtils::type_get_past_pointer(
-                                                        ASRUtils::type_get_past_allocatable(ASRUtils::expr_type(arg)))),
-                                                    ASR::arraystorageType::ColMajor, nullptr));
-                            Vec<ASR::call_arg_t> ref_args; ref_args.reserve(al, 1);
-                            ASR::call_arg_t ref_arg; ref_arg.loc = array_item->base.loc; ref_arg.m_value = array_item;
-                            ref_args.push_back(al, ref_arg);
-                            ASR::stmt_t* subroutine_call = ASRUtils::STMT(ASRUtils::make_SubroutineCall_t_util(al, x.base.base.loc,
-                                                    x.m_name, x.m_original_name, ref_args.p, ref_args.n, nullptr, nullptr, false, ASRUtils::get_class_proc_nopass_val(x.m_name)));
-                            doloop_body.push_back(al, subroutine_call);
-                        });
-                        remove_original_statement = true;
-                    }
+        void process_subroutine_arguments(
+            const ASR::SubroutineCall_t& x,
+            std::vector<ASR::expr_t*>& operands,
+            std::vector<bool>& array_mask,
+            ASR::expr_t*& first_array_operand
+        ) {
+            bool at_least_one_array = false;
+            for( size_t iarg = 0; iarg < x.n_args; iarg++ ) {
+                array_mask[iarg] = (x.m_args[iarg].m_value != nullptr &&
+                    ASRUtils::is_array(ASRUtils::expr_type(x.m_args[iarg].m_value)));
+                at_least_one_array = at_least_one_array || array_mask[iarg];
+            }
+            if (!at_least_one_array) {
+                return ;
+            }
+            bool is_all_rank_0 = true;
+            ASR::expr_t* operand = nullptr;
+            int common_rank = 0;
+            bool are_all_rank_same = true;
+            for( size_t iarg = 0; iarg < x.n_args; iarg++ ) {
+                if (x.m_args[iarg].m_value == nullptr) {
+                    operands.push_back(nullptr);
+                    continue;
                 }
+                ASR::expr_t** current_expr_copy_9 = current_expr;
+                current_expr = &(x.m_args[iarg].m_value);
+                call_replacer();
+                operand = *current_expr;
+                current_expr = current_expr_copy_9;
+                operands.push_back(operand);
+                int rank_operand = PassUtils::get_rank(operand);
+                if( rank_operand > 0 && first_array_operand == nullptr ) {
+                    first_array_operand = operand;
+                }
+                if( common_rank == 0 ) {
+                    common_rank = rank_operand;
+                }
+                if( common_rank != rank_operand &&
+                    rank_operand > 0 ) {
+                    are_all_rank_same = false;
+                }
+                array_mask[iarg] = (rank_operand > 0);
+                is_all_rank_0 = is_all_rank_0 && (rank_operand <= 0);
+            }
+            if( is_all_rank_0 ) {
+                return ;
+            }
+            if( !are_all_rank_same ) {
+                throw LCompilersException("Broadcasting support not yet available "
+                                        "for different shape arrays.");
+            }
+        }
+
+        // Processes a user-defined elemental subroutine call. This function ensures that if any
+        // of the subroutine call's arguments are arrays, a 'do loop' structure is generated to
+        // individually apply the subroutine to each element of the array(s).
+        void visit_SubroutineCall(const ASR::SubroutineCall_t& x) {
+            ASR::symbol_t* sym = x.m_name;
+            if (sym && PassUtils::is_elemental(sym)) {
+                if (!x.n_args) {
+                    return;
+                }
+                std:: vector<ASR::expr_t*> operands;
+                std::vector<bool> array_mask(x.n_args, false);
+                ASR::expr_t* first_array_operand { nullptr };
+                process_subroutine_arguments(x, operands, array_mask, first_array_operand);
+                if (!operands.size()) {
+                    return;
+                }
+
+                const int var_rank { PassUtils::get_rank(first_array_operand) };
+                const int result_rank { var_rank };
+                Vec<ASR::expr_t*> idx_vars, loop_vars, idx_vars_value;
+                std::vector<int> loop_var_indices;
+                Vec<ASR::stmt_t*> doloop_body;
+                create_do_loop(first_array_operand->base.loc, first_array_operand, var_rank, result_rank, idx_vars,
+                loop_vars, idx_vars_value, loop_var_indices, doloop_body,
+                first_array_operand, 2,
+                [=, &idx_vars_value, &idx_vars, &doloop_body]() {
+                    Vec<ASR::array_index_t> array_index;
+                    array_index.reserve(al, idx_vars.size());
+                    for (size_t i=0; i < idx_vars.size(); i++) {
+                        ASR::array_index_t idx;
+                        idx.m_left = nullptr;
+                        idx.m_right = idx_vars_value[i];
+                        idx.m_step = nullptr;
+                        idx.loc = idx_vars_value[i]->base.loc;
+                        array_index.push_back(al, idx);
+                    }
+                    // construct scalar subroutine call arguments
+                    Vec<ASR::call_arg_t> ref_args;
+                    ref_args.reserve(al, operands.size());
+                    for (size_t i=0; i < operands.size(); i++) {
+                        ASR::ttype_t* operand_type = ASRUtils::expr_type(operands[i]);
+                        ASR::expr_t* array_item;
+                        if (array_mask[i]) {
+                            array_item = ASRUtils::EXPR(ASR::make_ArrayItem_t(al, x.base.base.loc,
+                                operands[i], array_index.p, array_index.size(),
+                                ASRUtils::extract_type(operand_type),
+                                ASR::arraystorageType::ColMajor, nullptr)
+                            );
+                        } else {
+                            array_item = operands[i];
+                        }
+                        ASR::call_arg_t ref_arg;
+                        ref_arg.loc = array_item->base.loc;
+                        ref_arg.m_value = array_item;
+                        ref_args.push_back(al, ref_arg);
+                    }
+                    ASR::stmt_t* subroutine_call = ASRUtils::STMT(ASRUtils::make_SubroutineCall_t_util(al, x.base.base.loc,
+                                            x.m_name, x.m_original_name, ref_args.p, ref_args.n, nullptr, nullptr, false,
+                                            ASRUtils::get_class_proc_nopass_val(x.m_name)));
+                    doloop_body.push_back(al, subroutine_call);
+                });
+                remove_original_statement = true;
             }
             for (size_t i=0; i<x.n_args; i++) {
                 visit_call_arg(x.m_args[i]);

@@ -192,7 +192,8 @@ public:
                         new_call_args.p, new_call_args.n,
                         integer_type,
                         nullptr,
-                        nullptr));
+                        nullptr,
+                        false));
         *current_expr = new_function_call;
 
         ASR::expr_t* function_call_for_return_var = ASRUtils::EXPR(ASRUtils::make_FunctionCall_t_util(al, x->base.base.loc,
@@ -201,7 +202,8 @@ public:
                         args_for_return_var.p, args_for_return_var.n,
                         integer_type,
                         nullptr,
-                        nullptr));
+                        nullptr,
+                        false));
         call_for_return_var = function_call_for_return_var;
     }
 
@@ -338,6 +340,9 @@ public:
         current_scope = x.m_symtab;
         this->visit_ttype(*x.m_function_signature);
         current_scope = nullptr;
+        for( auto sym: x.m_symtab->get_scope() ) {
+            visit_symbol(*sym.second);
+        }
     }
 
 };

@@ -1,6 +1,8 @@
 #ifndef LCOMPILERS_PASS_MANAGER_H
 #define LCOMPILERS_PASS_MANAGER_H
 
+#include <iostream>
+
 #include <libasr/asr.h>
 #include <libasr/string_utils.h>
 #include <libasr/alloc.h>
@@ -20,11 +22,13 @@
 #include <libasr/pass/replace_init_expr.h>
 #include <libasr/pass/replace_implied_do_loops.h>
 #include <libasr/pass/replace_array_op.h>
+#include <libasr/pass/replace_array_op_simplifier.h>
 #include <libasr/pass/replace_select_case.h>
 #include <libasr/pass/wrap_global_stmts.h>
 #include <libasr/pass/replace_param_to_const.h>
 #include <libasr/pass/replace_print_arr.h>
 #include <libasr/pass/replace_where.h>
+#include <libasr/pass/replace_where_simplifier.h>
 #include <libasr/pass/replace_print_list_tuple.h>
 #include <libasr/pass/replace_arr_slice.h>
 #include <libasr/pass/replace_flip_sign.h>
@@ -47,14 +51,17 @@
 #include <libasr/pass/array_by_data.h>
 #include <libasr/pass/list_expr.h>
 #include <libasr/pass/create_subroutine_from_function.h>
+#include <libasr/pass/create_subroutine_from_function_simplifier.h>
 #include <libasr/pass/transform_optional_argument_functions.h>
 #include <libasr/pass/nested_vars.h>
 #include <libasr/pass/unique_symbols.h>
 #include <libasr/pass/insert_deallocate.h>
+#include <libasr/pass/simplifier.h>
 #include <libasr/pass/replace_print_struct_type.h>
 #include <libasr/pass/promote_allocatable_to_nonallocatable.h>
 #include <libasr/pass/replace_function_call_in_declaration.h>
 #include <libasr/pass/python_bind.h>
+#include <libasr/pass/replace_openmp.h>
 #include <libasr/codegen/asr_to_fortran.h>
 #include <libasr/asr_verify.h>
 #include <libasr/pickle.h>
@@ -72,6 +79,8 @@ namespace LCompilers {
     class PassManager {
         private:
 
+        std::vector<std::string> _passes_with_experimental_simplifier;
+        std::vector<std::string> _with_optimization_passes_for_experimental_simplifier;
         std::vector<std::string> _passes;
         std::vector<std::string> _with_optimization_passes;
         std::vector<std::string> _user_defined_passes;
@@ -83,6 +92,7 @@ namespace LCompilers {
             {"python_bind", &pass_python_bind},
             {"implied_do_loops", &pass_replace_implied_do_loops},
             {"array_op", &pass_replace_array_op},
+            {"array_op_simplifier", &pass_replace_array_op_simplifier},
             {"symbolic", &pass_replace_symbolic},
             {"flip_sign", &pass_replace_flip_sign},
             {"intrinsic_function", &pass_replace_intrinsic_function},
@@ -105,15 +115,19 @@ namespace LCompilers {
             {"pass_list_expr", &pass_list_expr},
             {"pass_array_by_data", &pass_array_by_data},
             {"subroutine_from_function", &pass_create_subroutine_from_function},
+            {"subroutine_from_function_simplifier", &pass_create_subroutine_from_function_simplifier},
             {"transform_optional_argument_functions", &pass_transform_optional_argument_functions},
             {"init_expr", &pass_replace_init_expr},
             {"nested_vars", &pass_nested_vars},
             {"where", &pass_replace_where},
+            {"where_simplifier", &pass_replace_where_simplifier},
             {"function_call_in_declaration", &pass_replace_function_call_in_declaration},
+            {"openmp", &pass_replace_openmp},
             {"print_struct_type", &pass_replace_print_struct_type},
             {"unique_symbols", &pass_unique_symbols},
             {"insert_deallocate", &pass_insert_deallocate},
-            {"promote_allocatable_to_nonallocatable", &pass_promote_allocatable_to_nonallocatable}
+            {"promote_allocatable_to_nonallocatable", &pass_promote_allocatable_to_nonallocatable},
+            {"simplifier", &pass_simplifier}
         };
 
         bool apply_default_passes;
@@ -121,7 +135,6 @@ namespace LCompilers {
 
         public:
         bool rtlib=false;
-
         void apply_passes(Allocator& al, ASR::TranslationUnit_t* asr,
                            std::vector<std::string>& passes, PassOptions &pass_options,
                            [[maybe_unused]] diag::Diagnostics &diagnostics) {
@@ -207,12 +220,87 @@ namespace LCompilers {
 
         PassManager(): apply_default_passes{false},
             c_skip_pass{false} {
+            _passes_with_experimental_simplifier = {
+                "global_stmts",
+                "init_expr",
+                "function_call_in_declaration",
+                "openmp",
+                "implied_do_loops",
+                "simplifier",
+                "nested_vars",
+                "transform_optional_argument_functions",
+                "forall",
+                "class_constructor",
+                "pass_list_expr",
+                "where_simplifier",
+                "subroutine_from_function_simplifier",
+                "array_op_simplifier",
+                "symbolic",
+                "intrinsic_function",
+                "intrinsic_subroutine",
+                "array_op_simplifier",
+                "pass_array_by_data",
+                "print_struct_type",
+                "print_arr",
+                "print_list_tuple",
+                "print_struct_type",
+                "array_dim_intrinsics_update",
+                "do_loops",
+                "while_else",
+                "select_case",
+                "inline_function_calls",
+                "unused_functions",
+                "unique_symbols",
+                "insert_deallocate",
+            };
+            _with_optimization_passes_for_experimental_simplifier = {
+                "global_stmts",
+                "init_expr",
+                "function_call_in_declaration",
+                "openmp",
+                "implied_do_loops",
+                "simplifier",
+                "nested_vars",
+                "transform_optional_argument_functions",
+                "forall",
+                "class_constructor",
+                "pass_list_expr",
+                "where_simplifier",
+                "subroutine_from_function_simplifier",
+                "array_op_simplifier",
+                "symbolic",
+                "flip_sign",
+                "intrinsic_function",
+                "intrinsic_subroutine",
+                "array_op_simplifier",
+                "pass_array_by_data",
+                "print_struct_type",
+                "print_arr",
+                "print_list_tuple",
+                "print_struct_type",
+                "loop_vectorise",
+                "array_dim_intrinsics_update",
+                "do_loops",
+                "while_else",
+                "dead_code_removal",
+                "select_case",
+                "unused_functions",
+                "sign_from_value",
+                "div_to_mul",
+                "fma",
+                "inline_function_calls",
+                "unique_symbols",
+                "insert_deallocate",
+                "promote_allocatable_to_nonallocatable"
+            };
             _passes = {
                 "python_bind",
                 "nested_vars",
                 "global_stmts",
                 "transform_optional_argument_functions",
                 "init_expr",
+                "forall",
+                "openmp",
                 "implied_do_loops",
                 "class_constructor",
                 "pass_list_expr",
@@ -246,6 +334,7 @@ namespace LCompilers {
                 "global_stmts",
                 "transform_optional_argument_functions",
                 "init_expr",
+                "openmp",
                 "implied_do_loops",
                 "class_constructor",
                 "pass_list_expr",
@@ -307,11 +396,15 @@ namespace LCompilers {
                 apply_passes(al, asr, _user_defined_passes, pass_options,
                     diagnostics);
             } else if( apply_default_passes ) {
-                if( pass_options.fast ) {
+                if( pass_options.fast && !ASRUtils::use_experimental_simplifier ) {
                     apply_passes(al, asr, _with_optimization_passes, pass_options,
                         diagnostics);
-                } else {
+                } else if (!pass_options.fast && !ASRUtils::use_experimental_simplifier) {
                     apply_passes(al, asr, _passes, pass_options, diagnostics);
+                } else if (pass_options.fast && ASRUtils::use_experimental_simplifier){
+                    apply_passes(al, asr, _with_optimization_passes_for_experimental_simplifier, pass_options, diagnostics);
+                } else if (!pass_options.fast && ASRUtils::use_experimental_simplifier) {
+                    apply_passes(al, asr, _passes_with_experimental_simplifier, pass_options, diagnostics);
                 }
             }
         }
@@ -320,10 +413,14 @@ namespace LCompilers {
                            PassOptions &pass_options,
                            [[maybe_unused]] diag::Diagnostics &diagnostics, LocationManager &lm) {
             std::vector<std::string> passes;
-            if (pass_options.fast) {
+            if (pass_options.fast && !pass_options.experimental_simplifier) {
                 passes = _with_optimization_passes;
-            } else {
+            } else if (!pass_options.fast && !pass_options.experimental_simplifier) {
                 passes = _passes;
+            } else if (pass_options.fast && pass_options.experimental_simplifier){
+                passes = _with_optimization_passes_for_experimental_simplifier;
+            } else if (!pass_options.fast && pass_options.experimental_simplifier) {
+                passes = _passes_with_experimental_simplifier;
             }
             for (size_t i = 0; i < passes.size(); i++) {
                 // TODO: rework the whole pass manager: construct the passes
