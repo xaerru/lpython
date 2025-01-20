@@ -1279,7 +1279,7 @@ public:
 
                 return ASRUtils::make_FunctionCall_t_util(al, loc, stemp,
                                                 s_generic, args_new.p, args_new.size(),
-                                                a_type, value, nullptr);
+                                                a_type, value, nullptr, false);
             } else {
                 Vec<ASR::call_arg_t> args_new;
                 args_new.reserve(al, func->n_args);
@@ -2743,7 +2743,7 @@ public:
             ASRUtils::expr_type(lbs[0]), dims.p, dims.size(), ASR::abiType::Source,
             false, ASR::array_physical_typeType::PointerToDataArray, true);
         return ASRUtils::EXPR(ASR::make_ArrayConstant_t(al,
-            loc, lbs.p, lbs.size(), type,
+            loc, target_n_dims, &lbs, type,
             ASR::arraystorageType::RowMajor));
     }
 
@@ -6092,9 +6092,10 @@ public:
                 parallel = true;
             }
         }
+        Vec<ASR::expr_t> v;
         if (parallel) {
-            tmp = ASR::make_DoConcurrentLoop_t(al, x.base.base.loc, head,
-                body.p, body.size());
+            // tmp = ASR::make_DoConcurrentLoop_t(al, x.base.base.loc, head,
+            //     body.p, body.size());
         } else {
             if (orelse.size() > 0)
                 tmp = ASR::make_DoLoop_t(al, x.base.base.loc, nullptr, head,
@@ -8518,8 +8519,17 @@ we will have to use something else.
                         }
                     }
                 }
-                tmp = ASR::make_Print_t(al, x.base.base.loc,
-                    args_expr.p, args_expr.size(), separator, end);
+                ASR::ttype_t *type = ASRUtils::TYPE(ASR::make_String_t(
+                            al, x.base.base.loc, -1, 0, nullptr, ASR::string_physical_typeType::PointerString));
+                ASR::expr_t* string_format = ASRUtils::EXPR(ASRUtils::make_StringFormat_t_util(al, x.base.base.loc,
+                    nullptr, args_expr.p, args_expr.size(), ASR::string_format_kindType::FormatFortran,
+                    type, nullptr));
+
+                Vec<ASR::expr_t*> print_args;
+                print_args.reserve(al, 1);
+                print_args.push_back(al, string_format);
+
+                tmp = ASR::make_Print_t(al, x.base.base.loc, string_format);
                 return;
             } else if (call_name == "quit") {
                 parse_args(x, args);
