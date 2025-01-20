@@ -41,9 +41,10 @@ namespace LCompilers::LPython {
 
 int save_pyc_files(const ASR::TranslationUnit_t &u,
                        std::string infile) {
+    LocationManager lm;
     diag::Diagnostics diagnostics;
     LCOMPILERS_ASSERT(asr_verify(u, true, diagnostics));
-    std::string modfile_binary = save_pycfile(u);
+    std::string modfile_binary = save_pycfile(u, lm);
 
     while( infile.back() != '.' ) {
         infile.pop_back();
@@ -217,7 +218,7 @@ ASR::Module_t* load_module(Allocator &al, SymbolTable *symtab,
         found = set_module_path(infile0, rl_path, infile,
                                 path_used, input, lpython, enum_py);
     } else {
-        mod1 = load_pycfile(al, input, false);
+        mod1 = load_pycfile(al, input, false, lm);
         fix_external_symbols(*mod1, *ASRUtils::get_tu_symtab(symtab));
         diag::Diagnostics diagnostics;
         LCOMPILERS_ASSERT(asr_verify(*mod1, true, diagnostics));
