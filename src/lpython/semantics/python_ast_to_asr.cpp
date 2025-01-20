@@ -545,7 +545,7 @@ public:
                 fix_exprs_ttype_t(func_calls, args, f);
                 int64_t a_len = t->m_len;
                 if( func_calls[0] ) {
-                    a_len = ASRUtils::extract_len<SemanticError>(func_calls[0], loc, diag);
+                    a_len = ASRUtils::extract_len<SemanticAbort>(func_calls[0], loc, diag);
                 }
                 return ASRUtils::TYPE(ASR::make_String_t(al, loc, t->m_kind, a_len, func_calls[0], ASR::string_physical_typeType::PointerString));
             }
