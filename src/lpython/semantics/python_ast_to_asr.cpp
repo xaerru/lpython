@@ -1073,7 +1073,7 @@ public:
         SetChar variable_dependencies_vec;
         variable_dependencies_vec.reserve(al, 1);
         ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, type);
-        ASR::asr_t* variable_asr = ASR::make_Variable_t(al, expr->base.loc, current_scope,
+        ASR::asr_t* variable_asr = ASRUtils::make_Variable_t_util(al, expr->base.loc, current_scope,
                                         s2c(al, dummy_ret_name), variable_dependencies_vec.p,
                                         variable_dependencies_vec.size(), ASR::intentType::Local,
                                         nullptr, nullptr, ASR::storage_typeType::Default,
@@ -2681,7 +2681,7 @@ public:
         SetChar variable_dependencies_vec;
         variable_dependencies_vec.reserve(al, 1);
         ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, type);
-        ASR::asr_t *v = ASR::make_Variable_t(al, loc, current_scope,
+        ASR::asr_t *v = ASRUtils::make_Variable_t_util(al, loc, current_scope,
                 s2c(al, var_name), variable_dependencies_vec.p,
                 variable_dependencies_vec.size(),
                 s_intent, nullptr, nullptr, storage_type, type,
@@ -2839,7 +2839,7 @@ public:
             ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec,
                     fn_type->m_arg_types[i]);
             v = ASR::down_cast<ASR::symbol_t>(
-                ASR::make_Variable_t(al, x.m_args.m_args[i].loc,
+                ASRUtils::make_Variable_t_util(al, x.m_args.m_args[i].loc,
                 current_scope, s2c(al, arg_name), variable_dependencies_vec.p,
                 variable_dependencies_vec.size(), ASRUtils::intent_unspecified,
                 nullptr, nullptr, ASR::storage_typeType::Default, fn_type->m_arg_types[i],
@@ -3438,7 +3438,7 @@ public:
         SetChar variable_dependencies_vec;
         variable_dependencies_vec.reserve(al, 1);
         ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, type, init_expr, value);
-        ASR::asr_t *v = ASR::make_Variable_t(al, loc, current_scope,
+        ASR::asr_t *v = ASRUtils::make_Variable_t_util(al, loc, current_scope,
                 s2c(al, var_name), variable_dependencies_vec.p,
                 variable_dependencies_vec.size(), s_intent, init_expr,
                 value, storage_type, type, nullptr, current_procedure_abi_type,
@@ -3466,7 +3466,7 @@ public:
         SetChar variable_dependencies_vec;
         variable_dependencies_vec.reserve(al, 1);
         ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, type, init_expr, value);
-        ASR::asr_t *v = ASR::make_Variable_t(al, loc, current_scope,
+        ASR::asr_t *v = ASRUtils::make_Variable_t_util(al, loc, current_scope,
                 s2c(al, var_name), variable_dependencies_vec.p,
                 variable_dependencies_vec.size(),
                 s_intent, init_expr, value, storage_type, type, nullptr,
@@ -4370,7 +4370,7 @@ public:
             ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec,
                     func->m_arg_types[i]);
             v = ASR::down_cast<ASR::symbol_t>(
-                ASR::make_Variable_t(al, loc,
+                ASRUtils::make_Variable_t_util(al, loc,
                 current_scope, s2c(al, arg_name), variable_dependencies_vec.p,
                 variable_dependencies_vec.size(), ASRUtils::intent_unspecified,
                 nullptr, nullptr, ASR::storage_typeType::Default, func->m_arg_types[i],
@@ -4389,7 +4389,7 @@ public:
             variable_dependencies_vec.reserve(al, 1);
             ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec,
                     func->m_return_var_type);
-            ASR::asr_t *return_var = ASR::make_Variable_t(al, loc,
+            ASR::asr_t *return_var = ASRUtils::make_Variable_t_util(al, loc,
                 current_scope, s2c(al, return_var_name), variable_dependencies_vec.p,
                 variable_dependencies_vec.size(), ASRUtils::intent_return_var,
                 nullptr, nullptr, ASR::storage_typeType::Default, func->m_return_var_type,
@@ -4607,7 +4607,7 @@ public:
                 SetChar variable_dependencies_vec;
                 variable_dependencies_vec.reserve(al, 1);
                 ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, arg_type, init_expr, value);
-                ASR::asr_t *_tmp = ASR::make_Variable_t(al, loc, current_scope,
+                ASR::asr_t *_tmp = ASRUtils::make_Variable_t_util(al, loc, current_scope,
                         s2c(al, arg_s), variable_dependencies_vec.p,
                         variable_dependencies_vec.size(),
                         s_intent, init_expr, value, storage_type, arg_type,
@@ -4652,7 +4652,7 @@ public:
                 SetChar variable_dependencies_vec;
                 variable_dependencies_vec.reserve(al, 1);
                 ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, type);
-                ASR::asr_t *return_var = ASR::make_Variable_t(al, x.m_returns->base.loc,
+                ASR::asr_t *return_var = ASRUtils::make_Variable_t_util(al, x.m_returns->base.loc,
                     current_scope, s2c(al, return_var_name), variable_dependencies_vec.p,
                     variable_dependencies_vec.size(), ASRUtils::intent_return_var,
                     nullptr, nullptr, storage_type, type, nullptr, current_procedure_abi_type, ASR::Public,
@@ -4981,7 +4981,7 @@ public:
                         variable_dependencies_vec.reserve(al, 1);
                         ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, type, init_expr, value);
                         // Build the variable and add it to the scope
-                        ASR::asr_t *v = ASR::make_Variable_t(al, x.base.base.loc, current_scope,
+                        ASR::asr_t *v = ASRUtils::make_Variable_t_util(al, x.base.base.loc, current_scope,
                             s2c(al, tvar_name), variable_dependencies_vec.p, variable_dependencies_vec.size(),
                             s_intent, init_expr, value, storage_type, type, nullptr, current_procedure_abi_type,
                             s_access, s_presence, value_attr);
@@ -5738,7 +5738,7 @@ public:
         SetChar variable_dependencies_vec;
         variable_dependencies_vec.reserve(al, 1);
         ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, int_type);
-        auto explicit_iter_variable = ASR::make_Variable_t(al, loc,
+        auto explicit_iter_variable = ASRUtils::make_Variable_t_util(al, loc,
             current_scope, s2c(al, explicit_iter_name),
             variable_dependencies_vec.p, variable_dependencies_vec.size(),
             ASR::intentType::Local, nullptr, nullptr, storage_type,
@@ -5946,7 +5946,7 @@ public:
                     SetChar variable_dependencies_vec;
                     variable_dependencies_vec.reserve(al, 1);
                     ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, loop_src_var_ttype);
-                    ASR::asr_t* tmp_assign_variable = ASR::make_Variable_t(al, sbt->base.base.loc, current_scope,
+                    ASR::asr_t* tmp_assign_variable = ASRUtils::make_Variable_t_util(al, sbt->base.base.loc, current_scope,
                         s2c(al, tmp_assign_name), variable_dependencies_vec.p, variable_dependencies_vec.size(),
                         ASR::intentType::Local, nullptr, nullptr, ASR::storage_typeType::Default,
                         loop_src_var_ttype, nullptr, ASR::abiType::Source, ASR::accessType::Public, ASR::presenceType::Required, false
@@ -5983,7 +5983,7 @@ public:
             SetChar variable_dependencies_vec;
             variable_dependencies_vec.reserve(al, 1);
             ASRUtils::collect_variable_dependencies(al, variable_dependencies_vec, loop_src_var_ttype);
-            ASR::asr_t* tmp_assign_variable = ASR::make_Variable_t(al, target->base.loc, current_scope,
+            ASR::asr_t* tmp_assign_variable = ASRUtils::make_Variable_t_util(al, target->base.loc, current_scope,
                 s2c(al, tmp_assign_name), variable_dependencies_vec.p, variable_dependencies_vec.size(),
                 ASR::intentType::Local, nullptr, nullptr, ASR::storage_typeType::Default,
                 loop_src_var_ttype, nullptr, ASR::abiType::Source, ASR::accessType::Public, ASR::presenceType::Required, false
